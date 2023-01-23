@@ -1,0 +1,20 @@
+def tasksToBridge = [:].withDefault {
+    [:].withDefault { [] }
+}
+new File('composite-tasks.txt').eachLine {line ->
+    def (included, task, taskPath) = line.split(',')
+    tasksToBridge[task][included] << taskPath
+}
+
+tasksToBridge.each { bridge, participants ->
+
+    tasks.register(bridge) {
+        gradle.includedBuilds.forEach {
+            def tasksToDependOn = participants[it.name]
+            tasksToDependOn.each { path ->
+                dependsOn(it.task(path))
+            }
+        }
+    }
+
+}

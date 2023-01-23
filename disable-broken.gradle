@@ -1,0 +1,8 @@
+rootProject {
+    allprojects {
+        // this task fails with a NPE when using a composite build :(
+        tasks.withType(GenerateMavenPom).configureEach {
+            enabled = false
+        }
+    }
+}

@@ -1,0 +1,24 @@
+pluginManagement {
+    includeBuild "settings-build-logic"
+}
+
+plugins {
+    id 'me.champeau.includegit' version '0.1.6'
+    id "com.gradle.enterprise" version "3.12.2"
+    id 'micronaut-uber-build'
+}
+
+rootProject.name = 'micronaut-uber-build'
+
+uberBuild {
+    includes {
+        micronaut('core') {
+            branch '4.0.x'
+        }
+        micronaut 'security'
+        micronaut 'validation'
+        micronaut('serde') {
+            slug 'micronaut-serialization'
+        }
+    }
+}

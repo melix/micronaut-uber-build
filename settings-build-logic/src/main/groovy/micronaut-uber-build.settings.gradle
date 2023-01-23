@@ -1,0 +1,124 @@
+gradleEnterprise {
+    server = "https://ge.micronaut.io"
+    buildScan {
+        publishAlways()
+    }
+}
+
+def uberBuild = extensions.create('uberBuild', UberBuildExtension)
+
+uberBuild.onInclude {
+
+    def tasksToBridge = gradle.startParameter.taskNames
+    def execOperations = services.get(ExecOperations)
+    def compositeTasks = new File('composite-tasks.txt')
+
+    if (compositeTasks.exists()) {
+        compositeTasks.delete()
+    }
+
+    compositeTasks.withWriter { writer ->
+        gitRepositories {
+            uberBuild.projectsConfig.each { k, data ->
+                String projectName = "micronaut-${k}"
+                String branchName = data.branch
+                String slug = data.githubSlug ?: projectName
+                // We will need to include the project, but configure dependency substitutions
+                // which will require a bit of trickery to figure out
+                include(projectName) {
+                    uri = "https://github.com/micronaut-projects/${slug}.git"
+                    branch = branchName
+                    codeReady {
+                        def gradleProps = new File(it.checkoutDirectory, "gradle.properties")
+                        if (gradleProps.exists()) {
+                            def props = new Properties()
+                            gradleProps.withInputStream { s -> props.load(s) }
+                            def projectGroupId = props.get("projectGroupId")
+                            if (!projectGroupId) {
+                                projectGroupId = props.get("projectGroup")
+                            }
+                            if (projectGroupId) {
+                                // Gradle won't let us bridge to `test` or `check`, only to specific tasks, like `:foo:test`
+                                // which is rather annoying since we don't know those in advance. The goal of the build executions
+                                // below is to determine which tasks to execute. This is ugly as hell. Don't do this at home.
+                                // The idea is to invoke the included builds in --dry-mode, so that we get a list of tasks
+                                // which correspond to the requested command line task. We write them in a file, which will
+                                // then be read by the build.gradle file to perform the `dependsOn` on tasks.
+                                // Very slow, very ugly, very sad.
+                                println "Determining tasks to execute for $projectName"
+                                tasksToBridge.each { t ->
+                                    def out = new ByteArrayOutputStream()
+                                    execOperations.exec { spec ->
+                                        spec.workingDir(checkoutDirectory)
+                                        spec.commandLine("./gradlew", t, "--dry-run", "--console=plain")
+                                        spec.standardOutput = out
+                                        spec.errorOutput = System.err
+                                    }
+                                    def lines = out.toString('utf-8').replace('\r', '').split('\n') as List<String>
+                                    lines.findAll {
+                                        it.startsWith(':')
+                                    }.collect {
+                                        (it - 'SKIPPED').trim()
+                                    }.findAll {
+                                        it.endsWith(":$t") && !it.contains('benchmark')
+                                    }.each { taskPath ->
+                                        writer.println("${projectName},$t,$taskPath")
+                                    }
+                                }
+
+                                // now we need the list of project paths, in order to configure
+                                // dependency substitutions
+                                def out = new ByteArrayOutputStream()
+                                execOperations.exec { spec ->
+                                    spec.workingDir(checkoutDirectory)
+                                    spec.commandLine("./gradlew", "-I", "../../dump-projects.gradle", "dumpProjects", "--console=plain")
+                                    spec.standardOutput = out
+                                    spec.errorOutput = System.err
+                                }
+                                def lines = out.toString('utf-8').replace('\r', '').split('\n') as List<String>
+                                def projectPaths = lines.findAll {
+                                    it.startsWith("Project path: ")
+                                }.collect {
+                                    it - "Project path: "
+                                }.findAll {
+                                    it != ':' // exclude root project which is a container
+                                }
+
+                                // Now configure the included build
+                                includeBuild {
+                                    projectPaths.each { projectPath ->
+                                        String artifactId = (projectPath.split(':') as List).last()
+                                        if (projectPath.endsWith('bom')) {
+                                            // Gradle bug:
+                                            // We need to publish the catalog file manually before the build
+                                            // is included, or it will fail with a file not found exception when included
+                                            execOperations.exec { spec ->
+                                                spec.workingDir(checkoutDirectory)
+                                                spec.commandLine("./gradlew", "${projectPath}:pAPTBR")
+                                                spec.standardOutput = System.out
+                                                spec.errorOutput = System.err
+                                            }
+                                        }
+                                        // Now we can perform the substitutions
+                                        dependencySubstitution {
+                                            println "Substituting $projectGroupId:micronaut-${artifactId} with project $projectPath"
+                                            if (projectPath.endsWith('bom')) {
+                                                // Substitutions on platforms MUST be done with the platform keyword
+                                                substitute(platform(module("$projectGroupId:micronaut-${artifactId}"))).using(platform(project(projectPath)))
+                                            } else {
+                                                substitute(module("$projectGroupId:micronaut-${artifactId}")).using(project(projectPath))
+                                            }
+                                        }
+
+                                    }
+                                }
+                            } else {
+                                throw new RuntimeException("Unable to detect group id for $projectName")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

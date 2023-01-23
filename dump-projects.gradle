@@ -1,0 +1,9 @@
+rootProject {
+    tasks.register("dumpProjects") {
+        doLast {
+            allprojects {
+                println "Project path: ${it.path}"
+            }
+        }
+    }
+}
