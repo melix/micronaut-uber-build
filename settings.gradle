@@ -15,10 +15,9 @@ uberBuild {
         micronaut('core') {
             branch '4.0.x'
         }
-        micronaut 'security'
-        micronaut 'validation'
         micronaut('serde') {
             slug 'micronaut-serialization'
         }
+        micronaut 'test-resources'
     }
 }
